@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+install/
+log/
+
+# CMake related
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# IDE specific files (example for VS Code and CLion)
+.vscode/
+.idea/
+
+# Editor specific files
+*~
+*.swp
+*.swo
+*.bak
+
+# Doxygen related (if used)
+docs/
