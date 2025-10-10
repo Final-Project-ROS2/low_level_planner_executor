@@ -22,13 +22,10 @@ public:
     using SetJointAngles = custom_interfaces::action::SetJointAngles;
     using GoalHandleSetJointAngles = rclcpp_action::ServerGoalHandle<SetJointAngles>;
 
-    RobotInterfaceNode() : Node("robot_interface_node")
+    explicit RobotInterfaceNode(const rclcpp::NodeOptions &options) 
+    : Node("robot_interface_node", options)
     {
         RCLCPP_INFO(this->get_logger(), "Initializing Robot Interface Node...");
-
-        // Initialize MoveIt interface
-        move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur5_manipulator");
-        move_group_->setPoseReferenceFrame("base_link");
 
         // Services
         get_pose_srv_ = this->create_service<GetCurrentPose>(
@@ -46,6 +43,14 @@ public:
             std::bind(&RobotInterfaceNode::handle_goal, this, _1, _2),
             std::bind(&RobotInterfaceNode::handle_cancel, this, _1),
             std::bind(&RobotInterfaceNode::handle_accepted, this, _1));
+    }
+
+    void init_move_group()
+    {
+        move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
+            shared_from_this(), "ur5_manipulator");
+        move_group_->setPoseReferenceFrame("base_link");
+        RCLCPP_INFO(this->get_logger(), "MoveGroupInterface initialized.");
     }
 
 private:
@@ -144,7 +149,10 @@ private:
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<RobotInterfaceNode>();
+    rclcpp::NodeOptions options;
+    options.parameter_overrides({{"use_sim_time", rclcpp::ParameterValue(true)}});
+    auto node = std::make_shared<RobotInterfaceNode>(options);
+    node->init_move_group();
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
