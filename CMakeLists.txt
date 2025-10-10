@@ -19,6 +19,7 @@ find_package(custom_interfaces REQUIRED)
 # Declare executable
 add_executable(moveit_pose_action_server src/moveit_pose_action_server.cpp)
 add_executable(low_level_planner_executor src/low_level_planner_executor.cpp)
+add_executable(cartesian_path_action_server src/cartesian_path_action_server.cpp)
 
 # Link dependencies
 ament_target_dependencies(moveit_pose_action_server
@@ -37,6 +38,15 @@ ament_target_dependencies(low_level_planner_executor
   moveit_ros_planning_interface
   custom_interfaces
 )
+ament_target_dependencies(cartesian_path_action_server
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  moveit_ros_planning_interface
+  moveit_msgs
+  tf2_geometry_msgs
+  custom_interfaces
+)
 
 # Install executables
 install(TARGETS
@@ -45,6 +55,10 @@ install(TARGETS
 )
 install(TARGETS 
   low_level_planner_executor
+  DESTINATION lib/${PROJECT_NAME}
+)
+install(TARGETS
+  cartesian_path_action_server
   DESTINATION lib/${PROJECT_NAME}
 )
 
