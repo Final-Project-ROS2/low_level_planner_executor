@@ -69,22 +69,43 @@ private:
         std::shared_ptr<GetCurrentPose::Response> res)
     {
         geometry_msgs::msg::PoseStamped current_pose = move_group_->getCurrentPose("tool0");
-        res->pose = current_pose.pose;
-        res->success = true;
-        res->message = "Current pose retrieved successfully.";
-        RCLCPP_INFO(this->get_logger(), "End-effector pose retrieved.");
+        auto &p = current_pose.pose.position;
+        auto &o = current_pose.pose.orientation;
+
+        // Check if pose is all zeros (with w=1.0)
+        bool is_default_pose = (p.x == 0.0 && p.y == 0.0 && p.z == 0.0 &&
+                                o.x == 0.0 && o.y == 0.0 && o.z == 0.0 && o.w == 1.0);
+
+        if (!is_default_pose) {
+            res->pose = current_pose.pose;
+            res->success = true;
+            res->message = "Current pose retrieved successfully.";
+            RCLCPP_INFO(this->get_logger(), "End-effector pose retrieved.");
+        } else {
+            res->success = false;
+            res->message = "Failed to fetch current robot state (default pose returned).";
+            RCLCPP_ERROR(this->get_logger(), "%s", res->message.c_str());
+        }
     }
+
 
     void get_joint_angles_cb(
         const std::shared_ptr<GetJointAngles::Request>,
         std::shared_ptr<GetJointAngles::Response> res)
     {
-        std::vector<double> joints = move_group_->getCurrentJointValues();
-        res->joint_positions = joints;
-        res->success = true;
-        res->message = "Joint angles retrieved successfully.";
-        RCLCPP_INFO(this->get_logger(), "Joint angles retrieved.");
+        try {
+            std::vector<double> joints = move_group_->getCurrentJointValues();
+            res->joint_positions = joints;
+            res->success = true;
+            res->message = "Joint angles retrieved successfully.";
+            RCLCPP_INFO(this->get_logger(), "Joint angles retrieved.");
+        } catch (const std::runtime_error &e) {
+            res->success = false;
+            res->message = std::string("Failed to get joint angles: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "%s", res->message.c_str());
+        }
     }
+
 
     // === Action callbacks ===
     rclcpp_action::GoalResponse handle_goal(
