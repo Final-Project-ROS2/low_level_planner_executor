@@ -27,6 +27,15 @@ public:
     {
         RCLCPP_INFO(this->get_logger(), "Initializing Robot Interface Node...");
 
+        RCLCPP_INFO(this->get_logger(), "Initializing MoveIt relative motion action server...");
+
+        this->declare_parameter<bool>("real_hardware", false);
+        real_hardware = this->get_parameter("real_hardware").as_bool();
+        RCLCPP_INFO(this->get_logger(), "Running with real_hardware: %s", real_hardware ? "true" : "false");
+
+        bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
+        RCLCPP_INFO(this->get_logger(), "Use sim time: %s", use_sim_time ? "true" : "false");
+
         // Services
         get_pose_srv_ = this->create_service<GetCurrentPose>(
             "get_current_pose",
@@ -47,8 +56,18 @@ public:
 
     void init_move_group()
     {
-        move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(
-            shared_from_this(), "ur5_manipulator");
+        RCLCPP_INFO(this->get_logger(), "Using real_hardware: %s", real_hardware ? "true" : "false");
+        if (real_hardware) {
+            move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.0;
+        } else {
+            move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur5_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.8;
+        }
         move_group_->setPoseReferenceFrame("base_link");
         RCLCPP_INFO(this->get_logger(), "MoveGroupInterface initialized.");
     }
@@ -63,11 +82,17 @@ private:
     rclcpp::Service<GetJointAngles>::SharedPtr get_joint_srv_;
     rclcpp_action::Server<SetJointAngles>::SharedPtr action_server_;
 
+    bool real_hardware;
+    double BASE_LINK_X_OFFSET;
+    double BASE_LINK_Y_OFFSET;
+    double BASE_LINK_Z_OFFSET;
+
     // === Service callbacks ===
     void get_current_pose_cb(
         const std::shared_ptr<GetCurrentPose::Request>,
         std::shared_ptr<GetCurrentPose::Response> res)
     {
+        RCLCPP_INFO(this->get_logger(), "Clock type: %d", this->get_clock()->get_clock_type());
         geometry_msgs::msg::PoseStamped current_pose = move_group_->getCurrentPose("tool0");
         auto &p = current_pose.pose.position;
         auto &o = current_pose.pose.orientation;
@@ -170,8 +195,21 @@ private:
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
+    // Declare default for the 'real_hardware' argument
+    bool real_hardware = false;
+
+    // Parse command-line arguments (like ros2 run pkg node --ros-args -p real_hardware:=true)
+    rclcpp::NodeOptions temp_options;
+    auto temp_node = std::make_shared<rclcpp::Node>("temp_node_for_args", temp_options);
+    temp_node->declare_parameter("real_hardware", rclcpp::ParameterValue(false));
+    real_hardware = temp_node->get_parameter("real_hardware").as_bool();
+
+    // Determine use_sim_time based on 'real_hardware'
+    bool use_sim_time = !real_hardware;
+
     rclcpp::NodeOptions options;
-    options.parameter_overrides({{"use_sim_time", rclcpp::ParameterValue(true)}});
+    options.parameter_overrides({{"use_sim_time", rclcpp::ParameterValue(use_sim_time)},
+                                {"real_hardware", rclcpp::ParameterValue(real_hardware)}});
     auto node = std::make_shared<RobotInterfaceNode>(options);
     node->init_move_group();
     rclcpp::spin(node);

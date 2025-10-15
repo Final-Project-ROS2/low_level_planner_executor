@@ -18,11 +18,14 @@ public:
     using GoalHandleMoveItPose = rclcpp_action::ServerGoalHandle<MoveItPose>;
 
     explicit MoveItPoseActionServer(const rclcpp::NodeOptions &options)
-    : Node("moveit_pose_action_server", options)
+    : Node("cartesian_path_action_server", options)
     {
         RCLCPP_INFO(this->get_logger(), "Initializing MoveIt pose action server...");
 
-        // Declare and log use_sim_time
+        this->declare_parameter<bool>("real_hardware", false);
+        real_hardware = this->get_parameter("real_hardware").as_bool();
+        RCLCPP_INFO(this->get_logger(), "Running with real_hardware: %s", real_hardware ? "true" : "false");
+
         bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
         RCLCPP_INFO(this->get_logger(), "Use sim time: %s", use_sim_time ? "true" : "false");
 
@@ -44,7 +47,18 @@ public:
 
     void init_move_group()
     {
-        move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur5_manipulator");
+        RCLCPP_INFO(this->get_logger(), "Using real_hardware: %s", real_hardware ? "true" : "false");
+        if (real_hardware) {
+            move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.0;
+        } else {
+            move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur5_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.8;
+        }
         move_group_->setPoseReferenceFrame("base_link");
         move_group_->setPlanningTime(10.0);
 
@@ -57,7 +71,11 @@ private:
     rclcpp_action::Server<MoveItPose>::SharedPtr action_server_;
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-    
+    bool real_hardware;
+    double BASE_LINK_X_OFFSET;
+    double BASE_LINK_Y_OFFSET;
+    double BASE_LINK_Z_OFFSET;
+
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid,
                                             std::shared_ptr<const MoveItPose::Goal> goal)
@@ -106,36 +124,40 @@ private:
         const double eef_step = 0.01; // 1 cm
 
 
-        // Collision object
+        if (!real_hardware) {
+            
 
-        std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
-        collision_objects.resize(2);
+            // Collision object
 
-        collision_objects[0].id = "table1";
-        collision_objects[0].header.frame_id = "world";
-        collision_objects[0].primitives.resize(1);
-        collision_objects[0].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
-        collision_objects[0].primitives[0].dimensions = {0.608, 2.0, 0.8};
-        collision_objects[0].primitive_poses.resize(1);
-        collision_objects[0].primitive_poses[0].position.x = 0.576;
-        collision_objects[0].primitive_poses[0].position.y = 0.0;
-        collision_objects[0].primitive_poses[0].position.z = 0.4;
-        collision_objects[0].operation = moveit_msgs::msg::CollisionObject::ADD;
+            std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
+            collision_objects.resize(2);
 
-        collision_objects[1].id = "base";
-        collision_objects[1].header.frame_id = "world";
-        collision_objects[1].primitives.resize(1);
-        collision_objects[1].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
-        collision_objects[1].primitives[0].dimensions = {1, 1, 0.79}; 
-        collision_objects[1].primitive_poses.resize(1);
-        collision_objects[1].primitive_poses[0].position.x = -0.3;
-        collision_objects[1].primitive_poses[0].position.y = 0.0;
-        collision_objects[1].primitive_poses[0].position.z = 0.4;
-        collision_objects[1].operation = moveit_msgs::msg::CollisionObject::ADD;
+            collision_objects[0].id = "table1";
+            collision_objects[0].header.frame_id = "world";
+            collision_objects[0].primitives.resize(1);
+            collision_objects[0].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
+            collision_objects[0].primitives[0].dimensions = {0.608, 2.0, 0.8};
+            collision_objects[0].primitive_poses.resize(1);
+            collision_objects[0].primitive_poses[0].position.x = 0.576;
+            collision_objects[0].primitive_poses[0].position.y = 0.0;
+            collision_objects[0].primitive_poses[0].position.z = 0.4;
+            collision_objects[0].operation = moveit_msgs::msg::CollisionObject::ADD;
+
+            collision_objects[1].id = "base";
+            collision_objects[1].header.frame_id = "world";
+            collision_objects[1].primitives.resize(1);
+            collision_objects[1].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
+            collision_objects[1].primitives[0].dimensions = {1, 1, 0.79}; 
+            collision_objects[1].primitive_poses.resize(1);
+            collision_objects[1].primitive_poses[0].position.x = -0.3;
+            collision_objects[1].primitive_poses[0].position.y = 0.0;
+            collision_objects[1].primitive_poses[0].position.z = 0.4;
+            collision_objects[1].operation = moveit_msgs::msg::CollisionObject::ADD;
 
 
-        // Add objects to the scene
-        planning_scene_interface.applyCollisionObjects(collision_objects);
+            // Add objects to the scene
+            planning_scene_interface.applyCollisionObjects(collision_objects);
+        }
 
 
         double fraction = move_group_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
@@ -160,8 +182,21 @@ private:
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
+    // Declare default for the 'real_hardware' argument
+    bool real_hardware = false;
+
+    // Parse command-line arguments (like ros2 run pkg node --ros-args -p real_hardware:=true)
+    rclcpp::NodeOptions temp_options;
+    auto temp_node = std::make_shared<rclcpp::Node>("temp_node_for_args", temp_options);
+    temp_node->declare_parameter("real_hardware", rclcpp::ParameterValue(false));
+    real_hardware = temp_node->get_parameter("real_hardware").as_bool();
+
+    // Determine use_sim_time based on 'real_hardware'
+    bool use_sim_time = !real_hardware;
+
     rclcpp::NodeOptions options;
-    options.parameter_overrides({{"use_sim_time", rclcpp::ParameterValue(true)}});
+    options.parameter_overrides({{"use_sim_time", rclcpp::ParameterValue(use_sim_time)},
+                                {"real_hardware", rclcpp::ParameterValue(real_hardware)}});
     auto node = std::make_shared<MoveItPoseActionServer>(options);
     node->init_move_group(); // Initialize MoveGroupInterface after node creation
     rclcpp::spin(node);
