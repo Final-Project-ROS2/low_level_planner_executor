@@ -44,8 +44,14 @@ public:
         RCLCPP_INFO(this->get_logger(), "Using real_hardware: %s", real_hardware ? "true" : "false");
         if (real_hardware) {
             move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.0;
         } else {
             move_group_ = std::make_shared<moveit::planning_interface::MoveGroupInterface>(shared_from_this(), "ur5_manipulator");
+            BASE_LINK_X_OFFSET = 0.0;
+            BASE_LINK_Y_OFFSET = 0.0;
+            BASE_LINK_Z_OFFSET = 0.8;
         }
         move_group_->setPoseReferenceFrame("base_link");
         move_group_->setPlanningTime(10.0);
@@ -59,6 +65,9 @@ private:
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
     bool real_hardware;
+    double BASE_LINK_X_OFFSET;
+    double BASE_LINK_Y_OFFSET;
+    double BASE_LINK_Z_OFFSET;
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID &uuid,
                                             std::shared_ptr<const MoveItRelative::Goal> goal)
@@ -103,6 +112,10 @@ private:
         target_pose.position.x += goal->distance_x;
         target_pose.position.y += goal->distance_y;
         target_pose.position.z += goal->distance_z;
+
+        target_pose.position.x -= BASE_LINK_X_OFFSET;
+        target_pose.position.y -= BASE_LINK_Y_OFFSET;
+        target_pose.position.z -= BASE_LINK_Z_OFFSET;
 
         // Apply relative rotation
         tf2::Quaternion q_orig, q_rot, q_new;

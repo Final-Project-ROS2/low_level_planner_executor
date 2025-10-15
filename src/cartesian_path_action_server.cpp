@@ -57,6 +57,7 @@ private:
     rclcpp_action::Server<MoveItPose>::SharedPtr action_server_;
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+    
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid,
                                             std::shared_ptr<const MoveItPose::Goal> goal)
