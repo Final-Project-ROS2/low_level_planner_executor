@@ -69,6 +69,10 @@ public:
             BASE_LINK_Z_OFFSET = 0.8;
         }
         move_group_->setPoseReferenceFrame("base_link");
+        move_group_->setPlanningTime(10.0);
+
+        RCLCPP_INFO(this->get_logger(), "Planning frame: %s", move_group_->getPlanningFrame().c_str());
+        RCLCPP_INFO(this->get_logger(), "End effector link: %s", move_group_->getEndEffectorLink().c_str());
         RCLCPP_INFO(this->get_logger(), "MoveGroupInterface initialized.");
     }
 
@@ -93,16 +97,16 @@ private:
         std::shared_ptr<GetCurrentPose::Response> res)
     {
         RCLCPP_INFO(this->get_logger(), "Clock type: %d", this->get_clock()->get_clock_type());
-        geometry_msgs::msg::PoseStamped current_pose = move_group_->getCurrentPose("tool0");
-        auto &p = current_pose.pose.position;
-        auto &o = current_pose.pose.orientation;
+        geometry_msgs::msg::Pose current_pose = move_group_->getCurrentPose("tool0").pose;
+        auto &p = current_pose.position;
+        auto &o = current_pose.orientation;
 
         // Check if pose is all zeros (with w=1.0)
         bool is_default_pose = (p.x == 0.0 && p.y == 0.0 && p.z == 0.0 &&
                                 o.x == 0.0 && o.y == 0.0 && o.z == 0.0 && o.w == 1.0);
 
         if (!is_default_pose) {
-            res->pose = current_pose.pose;
+            res->pose = current_pose;
             res->success = true;
             res->message = "Current pose retrieved successfully.";
             RCLCPP_INFO(this->get_logger(), "End-effector pose retrieved.");
