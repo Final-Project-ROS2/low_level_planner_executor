@@ -4,6 +4,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include <geometry_msgs/msg/pose.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit_msgs/msg/move_it_error_codes.hpp>
@@ -35,6 +36,11 @@ public:
 
         bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
         RCLCPP_INFO(this->get_logger(), "Use sim time: %s", use_sim_time ? "true" : "false");
+
+        // === Subscriber for /joint_states ===
+        joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+            "/joint_states", 10,
+            std::bind(&RobotInterfaceNode::joint_state_cb, this, _1));
 
         // Services
         get_pose_srv_ = this->create_service<GetCurrentPose>(
@@ -85,11 +91,21 @@ private:
     rclcpp::Service<GetCurrentPose>::SharedPtr get_pose_srv_;
     rclcpp::Service<GetJointAngles>::SharedPtr get_joint_srv_;
     rclcpp_action::Server<SetJointAngles>::SharedPtr action_server_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
 
     bool real_hardware;
     double BASE_LINK_X_OFFSET;
     double BASE_LINK_Y_OFFSET;
     double BASE_LINK_Z_OFFSET;
+    std::vector<double> latest_joint_positions_;
+    std::mutex joint_mutex_;
+
+    // === Joint state subscriber callback ===
+    void joint_state_cb(const sensor_msgs::msg::JointState::SharedPtr msg)
+    {
+        std::lock_guard<std::mutex> lock(joint_mutex_);
+        latest_joint_positions_ = msg->position;
+    }
 
     // === Service callbacks ===
     void get_current_pose_cb(
@@ -122,16 +138,16 @@ private:
         const std::shared_ptr<GetJointAngles::Request>,
         std::shared_ptr<GetJointAngles::Response> res)
     {
-        try {
-            std::vector<double> joints = move_group_->getCurrentJointValues();
-            res->joint_positions = joints;
+        std::lock_guard<std::mutex> lock(joint_mutex_);
+        if (!latest_joint_positions_.empty()) {
+            res->joint_positions = latest_joint_positions_;
             res->success = true;
             res->message = "Joint angles retrieved successfully.";
-            RCLCPP_INFO(this->get_logger(), "Joint angles retrieved.");
-        } catch (const std::runtime_error &e) {
+            RCLCPP_INFO(this->get_logger(), "Joint angles retrieved from /joint_states.");
+        } else {
             res->success = false;
-            res->message = std::string("Failed to get joint angles: ") + e.what();
-            RCLCPP_ERROR(this->get_logger(), "%s", res->message.c_str());
+            res->message = "No joint states received yet.";
+            RCLCPP_WARN(this->get_logger(), "%s", res->message.c_str());
         }
     }
 
