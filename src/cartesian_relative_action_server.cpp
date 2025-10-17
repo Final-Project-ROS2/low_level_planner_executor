@@ -68,6 +68,10 @@ private:
     double BASE_LINK_X_OFFSET;
     double BASE_LINK_Y_OFFSET;
     double BASE_LINK_Z_OFFSET;
+    double BASE_WIDTH = 0.805;
+    double BASE_LENGTH = 0.72;
+    double BASE_HEIGHT = 0.805;
+    double BASE_OFFSET = 0.195;
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID &uuid,
                                             std::shared_ptr<const MoveItRelative::Goal> goal)
@@ -165,6 +169,26 @@ private:
             collision_objects[1].primitive_poses[0].position.y = 0.0;
             collision_objects[1].primitive_poses[0].position.z = 0.4;
             collision_objects[1].operation = moveit_msgs::msg::CollisionObject::ADD;
+
+
+            // Add objects to the scene
+            planning_scene_interface.applyCollisionObjects(collision_objects);
+        } else {
+            // Collision object
+            RCLCPP_INFO(this->get_logger(), "Adding collision object for real hardware");
+            std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
+            collision_objects.resize(1);
+
+            collision_objects[0].id = "base";
+            collision_objects[0].header.frame_id = "world";
+            collision_objects[0].primitives.resize(1);
+            collision_objects[0].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
+            collision_objects[0].primitives[0].dimensions = {BASE_WIDTH, BASE_LENGTH, BASE_HEIGHT}; 
+            collision_objects[0].primitive_poses.resize(1);
+            collision_objects[0].primitive_poses[0].position.x = 0.0;
+            collision_objects[0].primitive_poses[0].position.y = (BASE_LENGTH / 2) - BASE_OFFSET;
+            collision_objects[0].primitive_poses[0].position.z = - (BASE_HEIGHT / 2) - 0.01;
+            collision_objects[0].operation = moveit_msgs::msg::CollisionObject::ADD;
 
 
             // Add objects to the scene
