@@ -6,6 +6,8 @@
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit_msgs/msg/move_it_error_codes.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <atomic>
+#include "std_msgs/msg/bool.hpp"
 
 #include <rclcpp_action/rclcpp_action.hpp>
 #include "custom_interfaces/action/moveit_pose.hpp"
@@ -44,6 +46,19 @@ public:
             std::bind(&MoveItPoseActionServer::handle_cancel, this, std::placeholders::_1),
             std::bind(&MoveItPoseActionServer::handle_accepted, this, std::placeholders::_1)
         );
+
+        emergency_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/emergency", 10,
+            [this](std_msgs::msg::Bool::SharedPtr msg) {
+                emergency_stop_ = msg->data;
+                if (emergency_stop_ && move_group_) {
+                    RCLCPP_WARN(this->get_logger(), "Emergency stop activated!");
+                    move_group_->stop();  // Immediately stop any motion
+                } else if (!emergency_stop_) {
+                    RCLCPP_INFO(this->get_logger(), "Emergency cleared");
+                }
+            }
+        );
     }
 
     void init_move_group()
@@ -69,6 +84,8 @@ public:
     }
 
 private:
+    std::atomic<bool> emergency_stop_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_sub_;
     rclcpp_action::Server<MoveItPose>::SharedPtr action_server_;
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
@@ -182,6 +199,13 @@ private:
         bool success = (move_group_->plan(my_plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
         auto result = std::make_shared<MoveItPose::Result>();
+        if (emergency_stop_) {
+            RCLCPP_ERROR(this->get_logger(), "Emergency Locked!");
+            result->success = false;
+            goal_handle->succeed(result);
+            return;
+        }
+
         if (success)
         {
             move_group_->move();
@@ -218,7 +242,10 @@ int main(int argc, char **argv)
                                 {"real_hardware", rclcpp::ParameterValue(real_hardware)}});
     auto node = std::make_shared<MoveItPoseActionServer>(options);
     node->init_move_group(); // Initialize MoveGroupInterface after node creation
-    rclcpp::spin(node);
-    rclcpp::shutdown();
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
+    // rclcpp::spin(node);
+    // rclcpp::shutdown();
     return 0;
 }

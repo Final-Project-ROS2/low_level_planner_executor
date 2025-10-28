@@ -7,6 +7,8 @@
 #include <moveit_msgs/msg/move_it_error_codes.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <atomic>
+#include "std_msgs/msg/bool.hpp"
 
 #include "custom_interfaces/action/moveit_relative.hpp"
 
@@ -18,7 +20,7 @@ public:
     using GoalHandleMoveItRelative = rclcpp_action::ServerGoalHandle<MoveItRelative>;
 
     explicit MoveItRelativeActionServer(const rclcpp::NodeOptions &options)
-        : Node("moveit_relative_action_server", options)
+        : Node("moveit_relative_action_server", options), emergency_stop_(false)
     {
         RCLCPP_INFO(this->get_logger(), "Initializing MoveIt relative motion action server...");
 
@@ -36,6 +38,19 @@ public:
             std::bind(&MoveItRelativeActionServer::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
             std::bind(&MoveItRelativeActionServer::handle_cancel, this, std::placeholders::_1),
             std::bind(&MoveItRelativeActionServer::handle_accepted, this, std::placeholders::_1)
+        );
+
+        emergency_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/emergency", 10,
+            [this](std_msgs::msg::Bool::SharedPtr msg) {
+                emergency_stop_ = msg->data;
+                if (emergency_stop_ && move_group_) {
+                    RCLCPP_WARN(this->get_logger(), "Emergency stop activated!");
+                    move_group_->stop();  // Immediately stop any motion
+                } else if (!emergency_stop_) {
+                    RCLCPP_INFO(this->get_logger(), "Emergency cleared");
+                }
+            }
         );
     }
 
@@ -61,6 +76,8 @@ public:
     }
 
 private:
+    std::atomic<bool> emergency_stop_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_sub_;
     rclcpp_action::Server<MoveItRelative>::SharedPtr action_server_;
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
@@ -72,6 +89,7 @@ private:
     double BASE_LENGTH = 0.72;
     double BASE_HEIGHT = 0.805;
     double BASE_OFFSET = 0.195;
+
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID &uuid,
                                             std::shared_ptr<const MoveItRelative::Goal> goal)
@@ -98,9 +116,19 @@ private:
 
     void execute(const std::shared_ptr<GoalHandleMoveItRelative> goal_handle)
     {
+
+        
+
         auto goal = goal_handle->get_goal();
         auto feedback = std::make_shared<MoveItRelative::Feedback>();
         auto result = std::make_shared<MoveItRelative::Result>();
+
+        if (emergency_stop_) {
+            RCLCPP_ERROR(this->get_logger(), "Emergency Locked!");
+            result->success = false;
+            goal_handle->succeed(result);
+            return;
+        }
 
         RCLCPP_INFO(this->get_logger(), "Executing relative motion...");
 
@@ -237,7 +265,10 @@ int main(int argc, char **argv)
                                 {"real_hardware", rclcpp::ParameterValue(real_hardware)}});
     auto node = std::make_shared<MoveItRelativeActionServer>(options);
     node->init_move_group();
-    rclcpp::spin(node);
-    rclcpp::shutdown();
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
+    // rclcpp::spin(node);
+    // rclcpp::shutdown();
     return 0;
 }
