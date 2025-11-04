@@ -153,7 +153,7 @@ private:
         tf2::Quaternion q_orig, q_rot, q_new;
         tf2::fromMsg(current_pose.orientation, q_orig);
         q_rot.setRPY(goal->roll, goal->pitch, goal->yaw);
-        q_new = q_rot * q_orig;
+        q_new = q_orig * q_rot;
         q_new.normalize();
         target_pose.orientation = tf2::toMsg(q_new);
 
