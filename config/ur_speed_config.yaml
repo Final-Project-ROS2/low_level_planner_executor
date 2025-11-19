@@ -1,0 +1,32 @@
+# Configuration for UR hardware-level emergency stop
+# Place this in your package's config/ directory
+
+moveit_relative_action_server:
+  ros__parameters:
+    # Normal operating speed (0.0 to 1.0)
+    # 1.0 = 100% of robot's maximum speed
+    # 0.5 = 50% of maximum speed
+    normal_speed: 1.0
+    
+    # Emergency speed (0.0 to 1.0)  
+    # 0.0 = complete stop (recommended for production)
+    # 0.1 = slow to 10% (good for testing/debugging)
+    emergency_speed: 0.0
+
+# Common configurations:
+
+# Production (maximum safety):
+# normal_speed: 1.0
+# emergency_speed: 0.0
+
+# Development/Testing (observe emergency behavior):
+# normal_speed: 1.0  
+# emergency_speed: 0.1
+
+# Conservative (shared workspace):
+# normal_speed: 0.5
+# emergency_speed: 0.0
+
+# Demo mode (slow and safe):
+# normal_speed: 0.3
+# emergency_speed: 0.0
