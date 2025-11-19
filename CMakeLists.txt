@@ -15,6 +15,8 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(custom_interfaces REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(ur_msgs REQUIRED)
 
 # Declare executable
 add_executable(moveit_pose_action_server src/moveit_pose_action_server.cpp)
@@ -31,6 +33,8 @@ ament_target_dependencies(moveit_pose_action_server
   moveit_msgs
   tf2_geometry_msgs
   custom_interfaces
+  control_msgs
+  ur_msgs
 )
 ament_target_dependencies(low_level_planner_executor
   rclcpp
@@ -47,6 +51,8 @@ ament_target_dependencies(cartesian_path_action_server
   moveit_msgs
   tf2_geometry_msgs
   custom_interfaces
+  control_msgs
+  ur_msgs
 )
 
 ament_target_dependencies(cartesian_relative_action_server
@@ -57,6 +63,8 @@ ament_target_dependencies(cartesian_relative_action_server
   moveit_msgs
   tf2_geometry_msgs
   custom_interfaces
+  control_msgs
+  ur_msgs
 )
 
 # Install executables

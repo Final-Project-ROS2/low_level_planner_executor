@@ -8,6 +8,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <atomic>
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/float64.hpp"
+#include "ur_msgs/srv/set_speed_slider_fraction.hpp"
 
 #include <rclcpp_action/rclcpp_action.hpp>
 #include "custom_interfaces/action/moveit_pose.hpp"
@@ -20,9 +22,15 @@ public:
     using GoalHandleMoveItPose = rclcpp_action::ServerGoalHandle<MoveItPose>;
 
     explicit MoveItPoseActionServer(const rclcpp::NodeOptions &options)
-    : Node("cartesian_path_action_server", options)
+    : Node("cartesian_path_action_server", options),
+      emergency_stop_(false),
+      normal_speed_(0.3),
+      emergency_speed_(0.0)
     {
         RCLCPP_INFO(this->get_logger(), "Initializing MoveIt pose action server...");
+
+        this->declare_parameter<double>("normal_speed", 0.3);
+        this->declare_parameter<double>("emergency_speed", 0.0);
 
         this->declare_parameter<bool>("real_hardware", false);
         real_hardware = this->get_parameter("real_hardware").as_bool();
@@ -30,6 +38,9 @@ public:
 
         bool use_sim_time = this->get_parameter("use_sim_time").as_bool();
         RCLCPP_INFO(this->get_logger(), "Use sim time: %s", use_sim_time ? "true" : "false");
+
+        normal_speed_ = this->get_parameter("normal_speed").as_double();
+        emergency_speed_ = this->get_parameter("emergency_speed").as_double();
 
         // Declare kinematics parameters
         this->declare_parameter("robot_description_kinematics.ur5_manipulator.kinematics_solver", "kdl_kinematics_plugin/KDLKinematicsPlugin");
@@ -46,15 +57,39 @@ public:
             std::bind(&MoveItPoseActionServer::handle_accepted, this, std::placeholders::_1)
         );
 
+        // Create service client for speed control (UR-specific)
+        if (real_hardware) {
+            speed_slider_client_ = this->create_client<ur_msgs::srv::SetSpeedSliderFraction>(
+                "/io_and_status_controller/set_speed_slider");
+            
+            // Subscribe to speed scaling state to monitor current speed
+            speed_scaling_sub_ = this->create_subscription<std_msgs::msg::Float64>(
+                "/speed_scaling_state_broadcaster/speed_scaling", 10,
+                [this](std_msgs::msg::Float64::SharedPtr msg) {
+                    current_speed_scaling_ = msg->data;
+                }
+            );
+            
+            RCLCPP_INFO(this->get_logger(), "UR speed control enabled - using hardware speed scaling");
+        }
+
         emergency_sub_ = this->create_subscription<std_msgs::msg::Bool>(
             "/emergency", 10,
             [this](std_msgs::msg::Bool::SharedPtr msg) {
+                bool prev_state = emergency_stop_.load();
                 emergency_stop_ = msg->data;
-                if (emergency_stop_ && move_group_) {
-                    RCLCPP_WARN(this->get_logger(), "Emergency stop activated!");
-                    move_group_->stop();  // Immediately stop any motion
-                } else if (!emergency_stop_) {
-                    RCLCPP_INFO(this->get_logger(), "Emergency cleared");
+                
+                if (emergency_stop_ && !prev_state) {
+                    RCLCPP_ERROR(this->get_logger(), "!!! EMERGENCY STOP ACTIVATED !!!");
+                    setRobotSpeed(emergency_speed_);  // Slow down or stop via hardware
+                    
+                    // Also call MoveIt stop as backup
+                    if (move_group_) {
+                        move_group_->stop();
+                    }
+                } else if (!emergency_stop_ && prev_state) {
+                    RCLCPP_INFO(this->get_logger(), "Emergency cleared - restoring normal speed");
+                    setRobotSpeed(normal_speed_);
                 }
             }
         );
@@ -77,6 +112,10 @@ public:
         move_group_->setPoseReferenceFrame("base_link");
         move_group_->setPlanningTime(10.0);
 
+        // Use normal MoveIt velocity scaling - hardware will handle the actual speed
+        move_group_->setMaxVelocityScalingFactor(0.3);
+        move_group_->setMaxAccelerationScalingFactor(0.3);
+
         RCLCPP_INFO(this->get_logger(), "Pose reference frame set to: %s", move_group_->getPoseReferenceFrame().c_str());
         RCLCPP_INFO(this->get_logger(), "Planning frame: %s", move_group_->getPlanningFrame().c_str());
         RCLCPP_INFO(this->get_logger(), "End effector link: %s", move_group_->getEndEffectorLink().c_str());
@@ -84,7 +123,12 @@ public:
 
 private:
     std::atomic<bool> emergency_stop_;
+    std::atomic<double> current_speed_scaling_{1.0};
+    double normal_speed_;
+    double emergency_speed_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr speed_scaling_sub_;
+    rclcpp::Client<ur_msgs::srv::SetSpeedSliderFraction>::SharedPtr speed_slider_client_;
     rclcpp_action::Server<MoveItPose>::SharedPtr action_server_;
     std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
@@ -97,6 +141,40 @@ private:
     double BASE_HEIGHT = 0.805;
     double BASE_OFFSET = 0.195;
 
+    // Set robot speed using UR's hardware speed slider
+    void setRobotSpeed(double speed_fraction)
+    {
+        if (!real_hardware || !speed_slider_client_) {
+            RCLCPP_DEBUG(this->get_logger(), "Speed control not available (simulation or client not ready)");
+            return;
+        }
+
+        // Wait for service to be available
+        if (!speed_slider_client_->wait_for_service(std::chrono::seconds(1))) {
+            RCLCPP_WARN(this->get_logger(), "Speed slider service not available");
+            return;
+        }
+
+        auto request = std::make_shared<ur_msgs::srv::SetSpeedSliderFraction::Request>();
+        request->speed_slider_fraction = std::clamp(speed_fraction, 0.0, 1.0);
+
+        RCLCPP_INFO(this->get_logger(), "Setting robot speed to %.1f%%", request->speed_slider_fraction * 100.0);
+
+        // Call service asynchronously
+        auto future = speed_slider_client_->async_send_request(request);
+        
+        // Wait a bit for the speed change to take effect
+        if (future.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready) {
+            auto response = future.get();
+            if (response->success) {
+                RCLCPP_INFO(this->get_logger(), "Speed successfully set to %.1f%%", request->speed_slider_fraction * 100.0);
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Failed to set speed");
+            }
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Speed setting timed out");
+        }
+    }
 
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid,
                                             std::shared_ptr<const MoveItPose::Goal> goal)
@@ -109,6 +187,10 @@ private:
     rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleMoveItPose> goal_handle)
     {
         RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+        if (move_group_) {
+            move_group_->stop();
+        }
+        setRobotSpeed(0.0);  // Stop via hardware
         (void)goal_handle;
         return rclcpp_action::CancelResponse::ACCEPT;
     }
@@ -125,9 +207,20 @@ private:
         RCLCPP_INFO(this->get_logger(), "Executing MoveIt trajectory...");
         auto goal = goal_handle->get_goal();
         auto pose = goal->pose;
+        auto result = std::make_shared<MoveItPose::Result>();
         RCLCPP_INFO(this->get_logger(), "Received Pose: position(%.3f, %.3f, %.3f) orientation(%.3f, %.3f, %.3f, %.3f)",
             pose.position.x, pose.position.y, pose.position.z,
             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
+
+        if (emergency_stop_) {
+            RCLCPP_ERROR(this->get_logger(), "Emergency Locked! Clear emergency before executing.");
+            result->success = false;
+            goal_handle->succeed(result);
+            return;
+        }
+
+        // Ensure robot is at normal speed before starting
+        setRobotSpeed(normal_speed_);
         
         geometry_msgs::msg::Pose target_pose;
         tf2::Quaternion orientation;
@@ -144,12 +237,54 @@ private:
         const double jump_threshold = 0.0; // Disable jump threshold
         const double eef_step = 0.01; // 1 cm
 
+        setupCollisionObjects();
 
-        if (!real_hardware) {
+        double fraction = move_group_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+
+        if (emergency_stop_) {
+            RCLCPP_ERROR(this->get_logger(), "Emergency Locked!");
+            result->success = false;
+            goal_handle->succeed(result);
+            return;
+        }
+
+        if (fraction > 0.0)
+        {
+            // Check for emergency before starting execution
+            if (emergency_stop_) {
+                RCLCPP_ERROR(this->get_logger(), "Emergency stop detected before execution!");
+                result->success = false;
+                goal_handle->succeed(result);
+                return;
+            }
+
+            // Execute with hardware-level monitoring
+            bool success = executeWithHardwareMonitoring(trajectory, goal_handle);
             
+            if (success && !emergency_stop_) {
+                RCLCPP_INFO(this->get_logger(), "Motion executed successfully (%.2f%% of path planned)", fraction * 100.0);
+                result->success = true;
+            } else {
+                if (emergency_stop_) {
+                    RCLCPP_ERROR(this->get_logger(), "Motion stopped due to emergency!");
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Motion execution failed!");
+                }
+                result->success = false;
+            }
+        }
+        else
+        {
+            RCLCPP_ERROR(this->get_logger(), "Motion planning failed!");
+            result->success = false;
+        }
 
-            // Collision object
+        goal_handle->succeed(result);
+    }
 
+    void setupCollisionObjects()
+    {
+        if (!real_hardware) {
             std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
             collision_objects.resize(2);
 
@@ -168,19 +303,15 @@ private:
             collision_objects[1].header.frame_id = "world";
             collision_objects[1].primitives.resize(1);
             collision_objects[1].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
-            collision_objects[1].primitives[0].dimensions = {1, 1, 0.79}; 
+            collision_objects[1].primitives[0].dimensions = {1, 1, 0.79};
             collision_objects[1].primitive_poses.resize(1);
             collision_objects[1].primitive_poses[0].position.x = -0.3;
             collision_objects[1].primitive_poses[0].position.y = 0.0;
             collision_objects[1].primitive_poses[0].position.z = 0.4;
             collision_objects[1].operation = moveit_msgs::msg::CollisionObject::ADD;
 
-
-            // Add objects to the scene
             planning_scene_interface.applyCollisionObjects(collision_objects);
         } else {
-            // Collision object
-
             std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
             collision_objects.resize(1);
 
@@ -188,43 +319,76 @@ private:
             collision_objects[0].header.frame_id = "world";
             collision_objects[0].primitives.resize(1);
             collision_objects[0].primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
-            collision_objects[0].primitives[0].dimensions = {BASE_WIDTH, BASE_LENGTH, BASE_HEIGHT}; 
+            collision_objects[0].primitives[0].dimensions = {BASE_WIDTH, BASE_LENGTH, BASE_HEIGHT};
             collision_objects[0].primitive_poses.resize(1);
             collision_objects[0].primitive_poses[0].position.x = 0.0;
             collision_objects[0].primitive_poses[0].position.y = (BASE_LENGTH / 2) - BASE_OFFSET;
-            collision_objects[0].primitive_poses[0].position.z = - (BASE_HEIGHT / 2) - 0.01;
+            collision_objects[0].primitive_poses[0].position.z = -(BASE_HEIGHT / 2) - 0.01;
             collision_objects[0].operation = moveit_msgs::msg::CollisionObject::ADD;
 
-
-            // Add objects to the scene
             planning_scene_interface.applyCollisionObjects(collision_objects);
         }
+    }
 
+    bool executeWithHardwareMonitoring(const moveit_msgs::msg::RobotTrajectory& trajectory,
+                                       const std::shared_ptr<GoalHandleMoveItPose>& goal_handle)
+    {
+        std::atomic<bool> execution_complete{false};
+        std::atomic<bool> execution_success{false};
 
-        double fraction = move_group_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+        // Execute trajectory in a separate thread
+        std::thread execution_thread([this, &trajectory, &execution_complete, &execution_success]() {
+            auto result = move_group_->execute(trajectory);
+            execution_success = (result == moveit::core::MoveItErrorCode::SUCCESS);
+            execution_complete = true;
+        });
 
-        auto result = std::make_shared<MoveItPose::Result>();
+        // Monitor for emergency - hardware speed scaling handles the actual stopping
+        rclcpp::Rate rate(50);  // 50Hz monitoring is sufficient since hardware handles the stop
+        
+        while (!execution_complete && rclcpp::ok()) {
+            // Check for emergency stop
+            if (emergency_stop_) {
+                RCLCPP_ERROR(this->get_logger(), "Emergency detected! Hardware speed scaling active.");
+                // Speed is already set to emergency_speed_ by the emergency callback
+                // The robot will smoothly decelerate due to hardware speed scaling
+                // Wait a bit for deceleration
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                // Then call MoveIt stop
+                move_group_->stop();
+                
+                // Wait for execution thread to finish
+                if (execution_thread.joinable()) {
+                    execution_thread.join();
+                }
+                
+                return false;
+            }
 
-        if (emergency_stop_) {
-            RCLCPP_ERROR(this->get_logger(), "Emergency Locked!");
-            result->success = false;
-            goal_handle->succeed(result);
-            return;
+            // Check for cancellation
+            if (goal_handle->is_canceling()) {
+                RCLCPP_INFO(this->get_logger(), "Goal cancelled");
+                setRobotSpeed(0.0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                move_group_->stop();
+                
+                if (execution_thread.joinable()) {
+                    execution_thread.join();
+                }
+                
+                return false;
+            }
+
+            rate.sleep();
         }
 
-        if (fraction > 0.0)
-        {
-            move_group_->execute(trajectory);
-            RCLCPP_INFO(this->get_logger(), "Motion execution completed successfully.");
-            result->success = true;
-        }
-        else
-        {
-            RCLCPP_ERROR(this->get_logger(), "Motion planning failed!");
-            result->success = false;
+        // Wait for execution thread to complete
+        if (execution_thread.joinable()) {
+            execution_thread.join();
         }
 
-        goal_handle->succeed(result);
+        return execution_success;
     }
 };
 
