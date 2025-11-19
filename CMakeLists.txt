@@ -33,6 +33,8 @@ ament_target_dependencies(moveit_pose_action_server
   moveit_msgs
   tf2_geometry_msgs
   custom_interfaces
+  control_msgs
+  ur_msgs
 )
 ament_target_dependencies(low_level_planner_executor
   rclcpp
@@ -49,6 +51,8 @@ ament_target_dependencies(cartesian_path_action_server
   moveit_msgs
   tf2_geometry_msgs
   custom_interfaces
+  control_msgs
+  ur_msgs
 )
 
 ament_target_dependencies(cartesian_relative_action_server
